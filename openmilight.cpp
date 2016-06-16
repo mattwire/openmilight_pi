@@ -121,7 +121,7 @@ void fade(uint8_t prefix, uint8_t rem_p, uint8_t remote, uint8_t color, uint8_t 
 {
   while(1){
     color++;
-    send(color, 0x00, 0x0F, 0x44, 0x00);
+    send(color, 0x00, 0x0F, remote, rem_p, 0x00, 0x00, resends);
     usleep(20000);
   }
 }
@@ -130,7 +130,7 @@ void strobe(uint8_t prefix, uint8_t rem_p, uint8_t remote, uint8_t bright, uint8
 {
   while(1){
     uint8_t color = rand() % 255;
-    send(color, bright, 0x0F, remote, resends);
+    send(color, bright, 0x0F, remote, rem_p, 0x00, 0x00, resends);
     usleep(50000);
   }
 }
