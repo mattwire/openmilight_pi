@@ -47,7 +47,7 @@ void receive()
       printf(".");
     }
     fflush(stdout);
-  } 
+  }
 }
 
 void send(uint8_t data[8])
@@ -69,7 +69,7 @@ void send(uint8_t data[8])
   }
 
   mlr.write(data, 7);
-    
+
   for(int i = 0; i < resends; i++){
     mlr.resend();
   }
@@ -169,25 +169,25 @@ void udp_raw()
   }
 }
 
-void udp_milight(uint16_t remote)
+void udp_milight(uint8_t rem_p, uint8_t remote, uint8_t retries)
 {
   fd_set socks;
   int discover_fd, data_fd;
   struct sockaddr_in discover_addr, data_addr, cliaddr;
   char mesg[42];
   char reply[30] = "192.168.1.12,BABECAFEBABE,";
- 
+
   int disco = -1;
 
   uint8_t data[8];
   data[0] = 0xB8;
-  data[1] = (remote >> 8) & 0xFF;
-  data[2] = remote & 0xFF;
+  data[1] = rem_p;
+  data[2] = remote;
   data[3] = 0x00;
   data[4] = 0x00;
   data[5] = 0x00;
   data[6] = 0x01;
-  data[7] = 0x09;
+  data[7] = retries;
 
   discover_fd = socket(AF_INET, SOCK_DGRAM, 0);
   bzero(&discover_addr, sizeof(discover_addr));
@@ -203,7 +203,7 @@ void udp_milight(uint16_t remote)
   data_addr.sin_port = htons(8899);
   bind(data_fd, (struct sockaddr *)&data_addr, sizeof(data_addr));
 
-  /* 
+  /*
    * The worst hack ever, but probably slightly better than hardcoded
    * Should move this to an ioctl command as there seems to be no better
    * of simpler option to retrieve the IP and MAC.
@@ -239,19 +239,19 @@ void udp_milight(uint16_t remote)
       if(FD_ISSET(discover_fd, &socks)){
         int n = recvfrom(discover_fd, mesg, 41, 0, (struct sockaddr *)&cliaddr, &len);
         mesg[n] = '\0';
-        
+
         if(debug){
           char str[INET_ADDRSTRLEN];
           long ip = cliaddr.sin_addr.s_addr;
           inet_ntop(AF_INET, &ip, str, INET_ADDRSTRLEN);
-          printf("UDP --> Received discovery request (%s) from %s\n", mesg, str);  
+          printf("UDP --> Received discovery request (%s) from %s\n", mesg, str);
         }
 
         if(!strncmp(mesg, "Link_Wi-Fi", 41)){
           sendto(discover_fd, reply, 30, 0, (struct sockaddr*)&cliaddr, len);
         }
       }
-      
+
       if(FD_ISSET(data_fd, &socks)){
         int n = recvfrom(data_fd, mesg, 41, 0, (struct sockaddr *)&cliaddr, &len);
 
@@ -375,7 +375,7 @@ void udp_milight(uint16_t remote)
               if(disco > 0){
                 data[0] = 0xB0 + disco;
               }
-              break; 
+              break;
             /* All White */
             case 0xC2:
               disco = -1;
@@ -444,7 +444,7 @@ void udp_milight(uint16_t remote)
     } /* End select */
 
   } /* While (1) */
-  
+
 }
 
 void usage(const char *arg, const char *options){
@@ -562,7 +562,7 @@ int main(int argc, char** argv)
         command = strtoll(optarg, NULL, 16);
         break;
       case '?':
-        if(optopt == 'n' || optopt == 'p' || optopt == 'q' || 
+        if(optopt == 'n' || optopt == 'p' || optopt == 'q' ||
            optopt == 'r' || optopt == 'c' || optopt == 'b' ||
            optopt == 'k' || optopt == 'w'){
           fprintf(stderr, "Option -%c requires an argument.\n", optopt);
@@ -593,15 +593,15 @@ int main(int argc, char** argv)
     printf("Receiving mode, press Ctrl-C to end\n");
     receive();
   }
- 
+
   if(do_udp){
-    printf("UDP mode (raw), press Ctrl-C to end\n"); 
+    printf("UDP mode (raw), press Ctrl-C to end\n");
     udp_raw();
-  } 
+  }
 
   if(do_milight){
-    printf("UDP mode (milight), press Ctrl-C to end\n"); 
-    udp_milight(0x0044);
+    printf("UDP mode (milight), press Ctrl-C to end\n");
+    udp_milight(rem_p, remote, resends);
   }
 
   if(do_fade){
@@ -612,7 +612,7 @@ int main(int argc, char** argv)
   if(do_strobe){
     printf("Strobe mode, press Ctrl-C to end\n");
     strobe(prefix, rem_p, remote, bright, resends);
-  } 
+  }
 
   /*
   double from = getTime();
