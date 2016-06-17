@@ -94,13 +94,13 @@ void send(uint64_t v)
 }
 
 void send(uint8_t color, uint8_t bright, uint8_t key,
-          uint8_t remote = 0x01, uint8_t remote_prefix = 0x00,
+          uint16_t remote = 0x0001,
 	  uint8_t prefix = 0xB8, uint8_t seq = 0x00, uint8_t resends = 10)
 {
   uint8_t data[8];
   data[0] = prefix;
-  data[1] = remote_prefix;
-  data[2] = remote;
+  data[1] = (remote >> 8);
+  data[2] = remote & 0xff;
   data[3] = color;
   data[4] = bright;
   data[5] = key;
@@ -117,20 +117,40 @@ double getTime()
   return tv.tv_sec + ((double)tv.tv_usec) * 1e-6;
 }
 
-void fade(uint8_t prefix, uint8_t rem_p, uint8_t remote, uint8_t color, uint8_t bright, uint8_t resends)
+void fade(uint8_t prefix, uint16_t remote, uint8_t color, uint8_t bright, uint8_t resends)
 {
+  uint8_t data[8];
+  data[0] = prefix; // prefix
+  data[1] = (remote >> 8); // remote byte 1
+  data[2] = remote & 0xff; // remote byte 2
+  data[4] = 0x00; // bright
+  data[5] = 0x0F; // key
+  data[6] = 0x00; // seq
+  data[7] = resends; // resends
+
   while(1){
     color++;
-    send(color, 0x00, 0x0F, remote, rem_p, 0x00, 0x00, resends);
+    data[3] = color; // color
+    send(data);
     usleep(20000);
   }
 }
 
-void strobe(uint8_t prefix, uint8_t rem_p, uint8_t remote, uint8_t bright, uint8_t resends)
+void strobe(uint8_t prefix, uint16_t remote, uint8_t bright, uint8_t resends)
 {
+  uint8_t data[8];
+  data[0] = prefix; // prefix
+  data[1] = (remote >> 8); // remote byte 1
+  data[2] = remote & 0xff; // remote byte 2
+  data[4] = bright; // bright
+  data[5] = 0x0F; // key
+  data[6] = 0x00; // seq
+  data[7] = resends; // resends
+
   while(1){
     uint8_t color = rand() % 255;
-    send(color, bright, 0x0F, remote, rem_p, 0x00, 0x00, resends);
+    data[3] = color; // color
+    send(data);
     usleep(50000);
   }
 }
@@ -171,7 +191,7 @@ void udp_raw(uint16_t udp_port)
   }
 }
 
-void udp_milight(uint16_t udp_port, uint8_t rem_p, uint8_t remote, uint8_t retries)
+void udp_milight(uint16_t udp_port, uint16_t remote, uint8_t retries)
 {
   fd_set socks;
   int discover_fd, data_fd;
@@ -183,8 +203,8 @@ void udp_milight(uint16_t udp_port, uint8_t rem_p, uint8_t remote, uint8_t retri
 
   uint8_t data[8];
   data[0] = 0xB8;
-  data[1] = rem_p;
-  data[2] = remote;
+  data[1] = (remote >> 8);
+  data[2] = remote & 0xff;
   data[3] = 0x00;
   data[4] = 0x00;
   data[5] = 0x00;
@@ -463,8 +483,7 @@ void usage(const char *arg, const char *options){
   printf("   -P                       UDP port\n");
   printf("   -n NN<dec>               Resends of the same message\n");
   printf("   -p PP<hex>               Prefix value (Disco Mode)\n");
-  printf("   -q RR<hex>               First byte of the remote\n");
-  printf("   -r RR<hex>               Second byte of the remote\n");
+  printf("   -r RRRR<hex>             Two byte code of the remote\n");
   printf("   -c CC<hex>               Color byte\n");
   printf("   -b BB<hex>               Brightness byte\n");
   printf("   -k KK<hex>               Key byte\n");
@@ -488,8 +507,7 @@ int main(int argc, char** argv)
   int do_command = 0;
 
   uint8_t prefix   = 0xB8;
-  uint8_t rem_p    = 0x00;
-  uint8_t remote   = 0x01;
+  uint16_t remote  = 0x0001;
   uint8_t color    = 0x00;
   uint8_t bright   = 0x00;
   uint8_t key      = 0x01;
@@ -504,7 +522,7 @@ int main(int argc, char** argv)
 
   uint64_t tmp;
 
-  const char *options = "hdfslumP:n:p:q:r:c:b:k:v:w:";
+  const char *options = "hdfslumP:n:p:r:c:b:k:v:w:";
 
   while((c = getopt(argc, argv, options)) != -1){
     switch(c){
@@ -541,13 +559,9 @@ int main(int argc, char** argv)
         tmp = strtoll(optarg, NULL, 16);
         prefix = (uint8_t)tmp;
         break;
-      case 'q':
-        tmp = strtoll(optarg, NULL, 16);
-        rem_p = (uint8_t)tmp;
-        break;
       case 'r':
         tmp = strtoll(optarg, NULL, 16);
-        remote = (uint8_t)tmp;
+        remote = (uint16_t)tmp;
         break;
       case 'c':
         tmp = strtoll(optarg, NULL, 16);
@@ -570,7 +584,7 @@ int main(int argc, char** argv)
         command = strtoll(optarg, NULL, 16);
         break;
       case '?':
-        if(optopt == 'n' || optopt == 'p' || optopt == 'q' ||
+        if(optopt == 'n' || optopt == 'p' ||
            optopt == 'r' || optopt == 'c' || optopt == 'b' ||
            optopt == 'k' || optopt == 'w'){
           fprintf(stderr, "Option -%c requires an argument.\n", optopt);
@@ -609,17 +623,17 @@ int main(int argc, char** argv)
 
   if(do_milight){
     printf("UDP mode (milight) on port %16u, press Ctrl-C to end\n", udp_port);
-    udp_milight(udp_port, rem_p, remote, resends);
+    udp_milight(udp_port, remote, resends);
   }
 
   if(do_fade){
     printf("Fade mode, press Ctrl-C to end\n");
-    fade(prefix, rem_p, remote, color, bright, resends);
+    fade(prefix, remote, color, bright, resends);
   }
 
   if(do_strobe){
     printf("Strobe mode, press Ctrl-C to end\n");
-    strobe(prefix, rem_p, remote, bright, resends);
+    strobe(prefix, remote, bright, resends);
   }
 
   /*
@@ -638,7 +652,7 @@ int main(int argc, char** argv)
     send(command);
   }
   else{
-    send(color, bright, key, remote, rem_p, prefix, seq, resends);
+    send(color, bright, key, remote, prefix, seq, resends);
   }
 
   return 0;
