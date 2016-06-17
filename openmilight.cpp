@@ -135,7 +135,7 @@ void strobe(uint8_t prefix, uint8_t rem_p, uint8_t remote, uint8_t bright, uint8
   }
 }
 
-void udp_raw()
+void udp_raw(uint16_t udp_port)
 {
   int sockfd;
   struct sockaddr_in servaddr, cliaddr;
@@ -146,7 +146,7 @@ void udp_raw()
   bzero(&servaddr, sizeof(servaddr));
   servaddr.sin_family = AF_INET;
   servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-  servaddr.sin_port = htons(8899);
+  servaddr.sin_port = htons(udp_port);
   bind(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
   while(1){
@@ -171,7 +171,7 @@ void udp_raw()
   }
 }
 
-void udp_milight(uint8_t rem_p, uint8_t remote, uint8_t retries)
+void udp_milight(uint16_t udp_port, uint8_t rem_p, uint8_t remote, uint8_t retries)
 {
   fd_set socks;
   int discover_fd, data_fd;
@@ -202,7 +202,7 @@ void udp_milight(uint8_t rem_p, uint8_t remote, uint8_t retries)
   bzero(&data_addr, sizeof(data_addr));
   data_addr.sin_family = AF_INET;
   data_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  data_addr.sin_port = htons(8899);
+  data_addr.sin_port = htons(udp_port);
   bind(data_fd, (struct sockaddr *)&data_addr, sizeof(data_addr));
 
   /*
@@ -460,6 +460,7 @@ void usage(const char *arg, const char *options){
   printf("   -l                       Listening (receiving) mode\n");
   printf("   -u                       UDP mode (raw)\n");
   printf("   -m                       UDP mode (milight)\n");
+  printf("   -P                       UDP port\n");
   printf("   -n NN<dec>               Resends of the same message\n");
   printf("   -p PP<hex>               Prefix value (Disco Mode)\n");
   printf("   -q RR<hex>               First byte of the remote\n");
@@ -497,11 +498,13 @@ int main(int argc, char** argv)
 
   uint64_t command = 0x00;
 
+  uint16_t udp_port = 8899;
+
   int c;
 
   uint64_t tmp;
 
-  const char *options = "hdfslumn:p:q:r:c:b:k:v:w:";
+  const char *options = "hdfslumP:n:p:q:r:c:b:k:v:w:";
 
   while((c = getopt(argc, argv, options)) != -1){
     switch(c){
@@ -527,6 +530,9 @@ int main(int argc, char** argv)
       case 'm':
         do_milight = 1;
        break;
+      case 'P':
+        tmp = strtoll(optarg,NULL,10);
+        udp_port = (uint16_t)tmp;
       case 'n':
         tmp = strtoll(optarg, NULL, 10);
         resends = (uint8_t)tmp;
@@ -598,12 +604,12 @@ int main(int argc, char** argv)
 
   if(do_udp){
     printf("UDP mode (raw), press Ctrl-C to end\n");
-    udp_raw();
+    udp_raw(udp_port);
   }
 
   if(do_milight){
-    printf("UDP mode (milight), press Ctrl-C to end\n");
-    udp_milight(rem_p, remote, resends);
+    printf("UDP mode (milight) on port %16u, press Ctrl-C to end\n", udp_port);
+    udp_milight(udp_port, rem_p, remote, resends);
   }
 
   if(do_fade){
