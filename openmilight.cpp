@@ -29,6 +29,8 @@ static int debug = 0;
 
 static int dupesPrinted = 0;
 
+static int maxRemotes = 4;
+
 void receive()
 {
   while(1){
@@ -191,25 +193,17 @@ void udp_raw(uint16_t udp_port)
   }
 }
 
-void udp_milight(uint16_t udp_port, uint16_t remote, uint8_t retries)
+void udp_milight(uint16_t udp_ports[], uint16_t remotes[], uint8_t resends, uint8_t numRemotes)
 {
   fd_set socks;
-  int discover_fd, data_fd;
-  struct sockaddr_in discover_addr, data_addr, cliaddr;
+  int discover_fd, data_fd[maxRemotes];
+  struct sockaddr_in discover_addr, data_addr[maxRemotes], cliaddr;
   char mesg[42];
   char reply[30] = "192.168.1.12,BABECAFEBABE,";
 
   int disco = -1;
 
-  uint8_t data[8];
-  data[0] = 0xB8;
-  data[1] = (remote >> 8);
-  data[2] = remote & 0xff;
-  data[3] = 0x00;
-  data[4] = 0x00;
-  data[5] = 0x00;
-  data[6] = 0x01;
-  data[7] = retries;
+  uint8_t data[maxRemotes][8];
 
   discover_fd = socket(AF_INET, SOCK_DGRAM, 0);
   bzero(&discover_addr, sizeof(discover_addr));
@@ -218,12 +212,25 @@ void udp_milight(uint16_t udp_port, uint16_t remote, uint8_t retries)
   discover_addr.sin_port = htons(48899);
   bind(discover_fd, (struct sockaddr *)&discover_addr, sizeof(discover_addr));
 
-  data_fd = socket(AF_INET, SOCK_DGRAM, 0);
-  bzero(&data_addr, sizeof(data_addr));
-  data_addr.sin_family = AF_INET;
-  data_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  data_addr.sin_port = htons(udp_port);
-  bind(data_fd, (struct sockaddr *)&data_addr, sizeof(data_addr));
+  for ( unsigned int i = 0; i < numRemotes; i++ )
+  {
+    data[i][0] = 0xB8; // Disco step
+    data[i][1] = (remotes[i] >> 8); // remote byte 1
+    data[i][2] = remotes[i] & 0xff; // remote byte 2
+    data[i][3] = 0x00; // color
+    data[i][4] = 0x00; // bright
+    data[i][5] = 0x00; // key
+    data[i][6] = 0x01; // Sequence
+    data[i][7] = resends; // retries
+
+    data_fd[i] = socket(AF_INET, SOCK_DGRAM, 0);
+    bzero(&data_addr[i], sizeof(data_addr[i]));
+    data_addr[i].sin_family = AF_INET;
+    data_addr[i].sin_addr.s_addr = htonl(INADDR_ANY);
+    data_addr[i].sin_port = htons(udp_ports[i]);
+    bind(data_fd[i], (struct sockaddr *)&data_addr[i], sizeof(data_addr[i]));
+    printf("MilightBridge: Remote ID: %X, Listening on Port %u\n", remotes[i], udp_ports[i]);
+  }
 
   /*
    * The worst hack ever, but probably slightly better than hardcoded
@@ -254,7 +261,10 @@ void udp_milight(uint16_t udp_port, uint16_t remote, uint8_t retries)
 
     FD_ZERO(&socks);
     FD_SET(discover_fd, &socks);
-    FD_SET(data_fd, &socks);
+    for (unsigned int i=0;i<numRemotes;i++)
+    {
+      FD_SET(data_fd[i], &socks);
+    }
 
     if(select(FD_SETSIZE, &socks, NULL, NULL, NULL) >= 0){
 
@@ -274,195 +284,193 @@ void udp_milight(uint16_t udp_port, uint16_t remote, uint8_t retries)
         }
       }
 
-      if(FD_ISSET(data_fd, &socks)){
-        int n = recvfrom(data_fd, mesg, 41, 0, (struct sockaddr *)&cliaddr, &len);
+      for (unsigned int i=0;i<numRemotes;i++)
+      {
+        if(FD_ISSET(data_fd[i], &socks)){
+          int n = recvfrom(data_fd[i], mesg, 41, 0, (struct sockaddr *)&cliaddr, &len);
 
-        mesg[n] = '\0';
+          mesg[n] = '\0';
 
+          if(n == 2 || n == 3){
+            if(debug){
+              printf("UDP --> Received hex value (%02x, %02x, %02x)\n", mesg[0], mesg[1], mesg[2]);
+            }
 
-        if(n == 2 || n == 3){
-          if(debug){
-            printf("UDP --> Received hex value (%02x, %02x, %02x)\n", mesg[0], mesg[1], mesg[2]);
+            switch(mesg[0]){
+              /* Color */
+              case 0x40:
+                disco = -1;
+                data[i][5] = 0x0F;
+                data[i][3] = (0xC8 - mesg[1] + 0x100) & 0xFF;
+                data[i][0] = 0xB0;
+                break;
+              /* All Off */
+              case 0x41:
+                data[i][5] = 0x02;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* All On */
+              case 0x42:
+                data[i][4] = (data[i][4] & 0xF8);
+                data[i][5] = 0x01;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Disco slower */
+              case 0x43:
+                data[i][5] = 0x0C;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Disco faster */
+              case 0x44:
+                data[i][5] = 0x0B;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Z1 On */
+              case 0x45:
+                data[i][4] = (data[i][4] & 0xF8) | 0x01;
+                data[i][5] = 0x03;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Z1 Off */
+              case 0x46:
+                data[i][5] = 0x04;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Z2 On */
+              case 0x47:
+                data[i][4] = (data[i][4] & 0xF8) | 0x02;
+                data[i][5] = 0x05;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Z2 Off */
+              case 0x48:
+                data[i][5] = 0x06;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Z3 On */
+              case 0x49:
+                data[i][4] = (data[i][4] & 0xF8) | 0x03;
+                data[i][5] = 0x07;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Z3 Off */
+              case 0x4A:
+                data[i][5] = 0x08;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+               break;
+              /* Z4 On */
+              case 0x4B:
+                data[i][4] = (data[i][4] & 0xF8) | 0x04;
+                data[i][5] = 0x09;
+                 if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Z4 Off */
+              case 0x4C:
+                data[i][5] = 0x0A;
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* Disco */
+              case 0x4D:
+                disco = (disco + 1) % 9;
+                data[i][0] = 0xB0 + disco;
+                data[i][5] = 0x0D;
+                break;
+              /* Brightness */
+              case 0x4E:
+                data[i][5] = 0x0E;
+                data[i][4] = ((0x90 - (mesg[1] * 8) + 0x100) & 0xFF) | (data[i][4] & 0x07);
+                if(disco > 0){
+                  data[i][0] = 0xB0 + disco;
+                }
+                break;
+              /* All White */
+              case 0xC2:
+                disco = -1;
+                data[i][5] = 0x11;
+                break;
+              /* Z1 White. */
+              case 0xC5:
+                disco = -1;
+                data[i][5] = 0x13;
+                break;
+              /* Z2 White. */
+              case 0xC7:
+                disco = -1;
+                data[i][5] = 0x15;
+                break;
+              /* Z3 White. */
+              case 0xC9:
+                disco = -1;
+                data[i][5] = 0x17;
+                break;
+              /* Z4 White. */
+              case 0xCB:
+                disco = -1;
+                data[i][5] = 0x19;
+                break;
+              /* All Night */
+              case 0xC1:
+                disco = -1;
+                data[i][5] = 0x12;
+                break;
+              /* Z1 Night */
+              case 0xC6:
+                disco = -1;
+                data[i][5] = 0x14;
+                break;
+              /* Z2 Night */
+              case 0xC8:
+                disco = -1;
+                data[i][5] = 0x16;
+                break;
+              /* Z3 Night */
+              case 0xCA:
+                disco = -1;
+                data[i][5] = 0x18;
+                break;
+              /* Z4 Night */
+              case 0xCC:
+                disco = -1;
+                data[i][5] = 0x1A;
+                break;
+              default:
+                fprintf(stderr, "Unknown command %02x!\n", mesg[0]);
+                continue;
+            } /* End case command */
+
+            /* Send command */
+            send(data[i]);
+            data[i][6]++;
           }
-
-          data[0] = 0xB8;
-
-          switch(mesg[0]){
-            /* Color */
-            case 0x40:
-              disco = -1;
-              data[5] = 0x0F;
-              data[3] = (0xC8 - mesg[1] + 0x100) & 0xFF;
-              data[0] = 0xB0;
-              break;
-            /* All Off */
-            case 0x41:
-              data[5] = 0x02;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* All On */
-            case 0x42:
-              data[4] = (data[4] & 0xF8);
-              data[5] = 0x01;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Disco slower */
-            case 0x43:
-              data[5] = 0x0C;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Disco faster */
-            case 0x44:
-              data[5] = 0x0B;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Z1 On */
-            case 0x45:
-              data[4] = (data[4] & 0xF8) | 0x01;
-              data[5] = 0x03;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Z1 Off */
-            case 0x46:
-              data[5] = 0x04;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Z2 On */
-            case 0x47:
-              data[4] = (data[4] & 0xF8) | 0x02;
-              data[5] = 0x05;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Z2 Off */
-            case 0x48:
-              data[5] = 0x06;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Z3 On */
-            case 0x49:
-              data[4] = (data[4] & 0xF8) | 0x03;
-              data[5] = 0x07;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Z3 Off */
-            case 0x4A:
-              data[5] = 0x08;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-             break;
-            /* Z4 On */
-            case 0x4B:
-              data[4] = (data[4] & 0xF8) | 0x04;
-              data[5] = 0x09;
-               if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Z4 Off */
-            case 0x4C:
-              data[5] = 0x0A;
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* Disco */
-            case 0x4D:
-              disco = (disco + 1) % 9;
-              data[0] = 0xB0 + disco;
-              data[5] = 0x0D;
-              break;
-            /* Brightness */
-            case 0x4E:
-              data[5] = 0x0E;
-              data[4] = ((0x90 - (mesg[1] * 8) + 0x100) & 0xFF) | (data[4] & 0x07);
-              if(disco > 0){
-                data[0] = 0xB0 + disco;
-              }
-              break;
-            /* All White */
-            case 0xC2:
-              disco = -1;
-              data[5] = 0x11;
-              break;
-            /* Z1 White. */
-            case 0xC5:
-              disco = -1;
-              data[5] = 0x13;
-              break;
-            /* Z2 White. */
-            case 0xC7:
-              disco = -1;
-              data[5] = 0x15;
-              break;
-            /* Z3 White. */
-            case 0xC9:
-              disco = -1;
-              data[5] = 0x17;
-              break;
-            /* Z4 White. */
-            case 0xCB:
-              disco = -1;
-              data[5] = 0x19;
-              break;
-            /* All Night */
-            case 0xC1:
-              disco = -1;
-              data[5] = 0x12;
-              break;
-            /* Z1 Night */
-            case 0xC6:
-              disco = -1;
-              data[5] = 0x14;
-              break;
-            /* Z2 Night */
-            case 0xC8:
-              disco = -1;
-              data[5] = 0x16;
-              break;
-            /* Z3 Night */
-            case 0xCA:
-              disco = -1;
-              data[5] = 0x18;
-              break;
-            /* Z4 Night */
-            case 0xCC:
-              disco = -1;
-              data[5] = 0x1A;
-              break;
-            default:
-              fprintf(stderr, "Unknown command %02x!\n", mesg[0]);
-              continue;
-          } /* End case command */
-
-          /* Send command */
-          send(data);
-          data[6]++;
-        }
-        else {
-          fprintf(stderr, "Message has invalid size %d (expecting 2 or 3)!\n", n);
-        } /* End message size check */
-
-      } /* End handling data */
-
+          else {
+            fprintf(stderr, "Message has invalid size %d (expecting 2 or 3)!\n", n);
+          } /* End message size check */
+        } /* End handling data */
+      } /* End loop */
     } /* End select */
 
   } /* While (1) */
@@ -480,10 +488,9 @@ void usage(const char *arg, const char *options){
   printf("   -l                       Listening (receiving) mode\n");
   printf("   -u                       UDP mode (raw)\n");
   printf("   -m                       UDP mode (milight)\n");
-  printf("   -P                       UDP port\n");
   printf("   -n NN<dec>               Resends of the same message\n");
   printf("   -p PP<hex>               Prefix value (Disco Mode)\n");
-  printf("   -r RRRR<hex>             Two byte code of the remote\n");
+  printf("   -1|2|3|4 RRRR<hex>       Two byte code of the remote\n");
   printf("   -c CC<hex>               Color byte\n");
   printf("   -b BB<hex>               Brightness byte\n");
   printf("   -k KK<hex>               Key byte\n");
@@ -507,7 +514,11 @@ int main(int argc, char** argv)
   int do_command = 0;
 
   uint8_t prefix   = 0xB8;
-  uint16_t remote  = 0x0001;
+  uint16_t remotes[maxRemotes];
+  remotes[0]  = 0x0001;
+  remotes[1]  = 0x0002;
+  remotes[2]  = 0x0003;
+  remotes[3]  = 0x0004;
   uint8_t color    = 0x00;
   uint8_t bright   = 0x00;
   uint8_t key      = 0x01;
@@ -522,7 +533,7 @@ int main(int argc, char** argv)
 
   uint64_t tmp;
 
-  const char *options = "hdfslumP:n:p:r:c:b:k:v:w:";
+  const char *options = "hdfslumn:p:1:2:3:4:c:b:k:v:w:";
 
   while((c = getopt(argc, argv, options)) != -1){
     switch(c){
@@ -548,9 +559,6 @@ int main(int argc, char** argv)
       case 'm':
         do_milight = 1;
        break;
-      case 'P':
-        tmp = strtoll(optarg,NULL,10);
-        udp_port = (uint16_t)tmp;
       case 'n':
         tmp = strtoll(optarg, NULL, 10);
         resends = (uint8_t)tmp;
@@ -559,9 +567,21 @@ int main(int argc, char** argv)
         tmp = strtoll(optarg, NULL, 16);
         prefix = (uint8_t)tmp;
         break;
-      case 'r':
+      case '1':
         tmp = strtoll(optarg, NULL, 16);
-        remote = (uint16_t)tmp;
+        remotes[0] = (uint16_t)tmp;
+        break;
+      case '2':
+        tmp = strtoll(optarg, NULL, 16);
+        remotes[1] = (uint16_t)tmp;
+        break;
+      case '3':
+        tmp = strtoll(optarg, NULL, 16);
+        remotes[2] = (uint16_t)tmp;
+        break;
+      case '4':
+        tmp = strtoll(optarg, NULL, 16);
+        remotes[3] = (uint16_t)tmp;
         break;
       case 'c':
         tmp = strtoll(optarg, NULL, 16);
@@ -585,8 +605,10 @@ int main(int argc, char** argv)
         break;
       case '?':
         if(optopt == 'n' || optopt == 'p' ||
-           optopt == 'r' || optopt == 'c' || optopt == 'b' ||
-           optopt == 'k' || optopt == 'w'){
+           optopt == 'c' || optopt == 'b' ||
+           optopt == 'k' || optopt == 'w' ||
+           optopt == '1' || optopt == '2' ||
+           optopt == '3' || optopt == '4'){
           fprintf(stderr, "Option -%c requires an argument.\n", optopt);
         }
         else if(isprint(optopt)){
@@ -622,18 +644,20 @@ int main(int argc, char** argv)
   }
 
   if(do_milight){
-    printf("UDP mode (milight) on port %16u, press Ctrl-C to end\n", udp_port);
-    udp_milight(udp_port, remote, resends);
+    printf("UDP mode (milight), press Ctrl-C to end\n");
+    uint16_t udp_ports[] = { 8891, 8892, 8893, 8894 };
+    //uint16_t remotes[] = { 0x0001, 0xf746, 0x788e, 0x796a };
+    udp_milight(udp_ports, remotes, resends, maxRemotes);
   }
 
   if(do_fade){
     printf("Fade mode, press Ctrl-C to end\n");
-    fade(prefix, remote, color, bright, resends);
+    fade(prefix, remotes[0], color, bright, resends);
   }
 
   if(do_strobe){
     printf("Strobe mode, press Ctrl-C to end\n");
-    strobe(prefix, remote, bright, resends);
+    strobe(prefix, remotes[0], bright, resends);
   }
 
   /*
@@ -652,7 +676,7 @@ int main(int argc, char** argv)
     send(command);
   }
   else{
-    send(color, bright, key, remote, prefix, seq, resends);
+    send(color, bright, key, remotes[0], prefix, seq, resends);
   }
 
   return 0;
