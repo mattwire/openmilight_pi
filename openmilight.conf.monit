@@ -1,0 +1,8 @@
+check process openmilight matching "./openmilight"
+   start program "/etc/init.d/openmilight start"
+   stop program "/etc/init.d/openmilight stop"
+   if failed port 8891 type udp then restart
+   if failed port 8892 type udp then restart
+   if failed port 8893 type udp then restart
+   if failed port 8894 type udp then restart
+   if cpu > 22% for 2 cycles then restart
