@@ -10,7 +10,7 @@
 ### END INIT INFO
 
 dir="/opt"
-cmd="/opt/openmilight -m -d -n 10 -2 F746 -3 788E -4 796A"
+cmd="/opt/openmilight -m -d -n 10 -1 8140 -2 F746 -3 788E -4 796A"
 user=""
 
 name=`basename $0`
